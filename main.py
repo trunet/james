@@ -4,6 +4,10 @@ from twisted.internet import reactor, task
 from twisted.internet.serialport import SerialPort
 from twisted.web.client import getPage
 
+from txosc import osc
+from txosc import dispatch
+from txosc import async
+
 import simplejson as json
 import rfc822
 import ntplib
@@ -48,6 +52,26 @@ class James(ZigBeeProtocol):
 		
 		self.lc_printOnClock = task.LoopingCall(self.printOnClock)
 		self.lc_printOnClock.start(35.0, now=False)
+		
+		#TXOSC
+		self.port = 8000
+		self.dest_port = 9000
+		self.receiver = dispatch.Receiver()
+		self.sender = async.DatagramClientProtocol()
+		self._sender_port = reactor.listenUDP(0, self.sender)
+		self._server_port = reactor.listenUDP(self.port, async.DatagramServerProtocol(self.receiver))
+		self.receiver.addCallback("/trunetclock/brightness", self.trunetclock_brightness_handler)
+		#self.sender.send(osc.Message("/radio/tuner", float(line)/10), ("192.168.142.145", self.dest_port))
+	
+	def trunetclock_brightness_handler(self, message, address):
+		brightness = int(message.getValues()[0])
+		reactor.callFromThread(self.send,
+		          "tx",
+		          frame_id="\x01",
+		          dest_addr_long=devices["trunetclock"],
+		          dest_addr="\xff\xfe",
+		          data="\x54" +
+		               chr(brightness))
 	
 	def decodeFloat(self, var):
 		text = ""
