@@ -40,7 +40,7 @@ from struct import unpack
 
 import sys
 
-from xbeeService.protocol import ZigBeeProtocol
+from txXBee.protocol import txXBee
 
 def strip_accents(string):
 	import unicodedata
@@ -60,7 +60,7 @@ devices = {
 	"template": "\x00\x13\xA2\x00\x00\x00\x00\x00",
 }
 
-class James(ZigBeeProtocol):
+class James(txXBee):
 	def __init__(self, *args, **kwds):
 		super(James, self).__init__(*args, **kwds)
 		self.msgNumber = 1
@@ -232,7 +232,7 @@ if __name__ == '__main__':
 	log.startLogging(logFile)
 
 	port = o.opts['port']
-	log.msg('Attempting to open %s at %dbps as a %s device' % (port, o.opts['baudrate'], ZigBeeProtocol.__name__))
+	log.msg('Attempting to open %s at %dbps as a %s device' % (port, o.opts['baudrate'], txXBee.__name__))
 	
 	s = SerialPort(James(), o.opts['port'], reactor, baudrate=o.opts['baudrate'])
 	
