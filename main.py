@@ -36,7 +36,7 @@ import datetime
 import time
 
 import re
-from struct import unpack
+from struct import unpack, pack
 
 import sys
 
@@ -74,6 +74,9 @@ class James(txXBee):
 		self.lc_printOnClock = task.LoopingCall(self.printOnClock)
 		self.lc_printOnClock.start(35.0, now=False)
 		
+		self.lc_getTemp = task.LoopingCall(self.getTemp)
+		self.lc_getTemp.start(30.0)
+		
 		#TXOSC
 		self.port = 8000
 		self.dest_port = 9000
@@ -99,6 +102,14 @@ class James(txXBee):
 		for i in range(0, len(var)):
 			text += var[i]
 		return unpack('f', text)[0]
+		
+	def encodeFloat(self, var):
+		var = unpack('<L', pack('<f', var))[0]
+		v1 = var & 0xff
+		v2 = (var >> 8) & 0xff
+		v3 = (var >> 16) & 0xff
+		v4 = (var >> 24) & 0xff
+		return chr(v1) + chr(v2) + chr(v3) + chr(v4)
 
 	def handle_packet(self, xbeePacketDictionary):
 		response = xbeePacketDictionary
@@ -134,7 +145,7 @@ class James(txXBee):
 			               " Watts")
 
 	def printOnClock(self):
-		if self.msgNumber == 8:
+		if self.msgNumber == 6:
 			self.msgNumber = 1
 
 		scrollingPacket = ord("\xe0") | (self.msgNumber << 1)
@@ -158,6 +169,37 @@ class James(txXBee):
 		             dest_addr="\xff\xfe",
 		             data="\x05")
 
+	def getTemp(self):
+		log.msg("Getting temperature from nrpe server...")
+		import subprocess
+		import re
+		try:
+			output = subprocess.check_output(["./check_nrpe", "-H", "192.168.142.1", "-c", "check_temperature"])
+		except:
+			reactor.callFromThread(self.send,
+		            "tx",
+		            frame_id="\x01",
+		            dest_addr_long=devices["trunetclock"],
+		            dest_addr="\xff\xfe",
+		            data="\x56" + self.encodeFloat(float(0)))
+		finally:
+			m = re.search('^.*\s-\s.*\|\w*=(.*);;;;$', output)
+			if m:
+				log.msg("Sending temperature: " + m.group(1))
+				reactor.callFromThread(self.send,
+			            "tx",
+			            frame_id="\x01",
+			            dest_addr_long=devices["trunetclock"],
+			            dest_addr="\xff\xfe",
+			            data="\x56" + self.encodeFloat(float(m.group(1))))
+			else:
+				reactor.callFromThread(self.send,
+		            "tx",
+		            frame_id="\x01",
+		            dest_addr_long=devices["trunetclock"],
+		            dest_addr="\xff\xfe",
+		            data="\x56" + self.encodeFloat(float(0)))
+		
 	def getSantos(self):
 		def parseFeed(data):
 			return json.loads(data)
@@ -189,7 +231,7 @@ class James(txXBee):
 			msg = 1
 			for item in range(0, len(data)):
 				item = data.pop(0)
-				if msg == 8:
+				if msg == 6:
 					break
 				title = item['title']
 				log.msg("Sending to Clock on Address " + str(msg) + " - " + title)
