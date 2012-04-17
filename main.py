@@ -57,25 +57,26 @@ devices = {
 	"pc": "\x00\x13\xA2\x00\x40\x66\x5D\xB3",
 	"energymonitor": "\x00\x13\xA2\x00\x40\x5D\x35\x04",
 	"trunetclock": "\x00\x13\xA2\x00\x40\x66\x5D\xEF",
+	"ledcube": "\x00\x13\xA2\x00\x40\x6F\xB7\x68",
 	"template": "\x00\x13\xA2\x00\x00\x00\x00\x00",
 }
 
 class James(txXBee):
 	def __init__(self, *args, **kwds):
 		super(James, self).__init__(*args, **kwds)
-		self.msgNumber = 1
+		self.msgNumber = 0
+
+		self.lc_getTemp = task.LoopingCall(self.getTemp)
+		self.lc_getTemp.start(30.0)
 
 		self.lc_watt = task.LoopingCall(self.getWatts)
 		self.lc_watt.start(35.0)
 		
 		self.lc_get_sigasantos = task.LoopingCall(self.getSantos)
-		self.lc_get_sigasantos.start(60.0)
+		self.lc_get_sigasantos.start(300.0)
 		
 		self.lc_printOnClock = task.LoopingCall(self.printOnClock)
 		self.lc_printOnClock.start(35.0, now=False)
-		
-		self.lc_getTemp = task.LoopingCall(self.getTemp)
-		self.lc_getTemp.start(30.0)
 		
 		#TXOSC
 		self.port = 8000
@@ -85,6 +86,8 @@ class James(txXBee):
 		self._sender_port = reactor.listenUDP(0, self.sender)
 		self._server_port = reactor.listenUDP(self.port, async.DatagramServerProtocol(self.receiver))
 		self.receiver.addCallback("/trunetclock/brightness", self.trunetclock_brightness_handler)
+		self.receiver.addCallback("/ledcube/effect", self.ledcube_effect_handler)
+		self.receiver.addCallback("/ledcube/turnoff", self.ledcube_turnoff_handler)
 		#self.sender.send(osc.Message("/radio/tuner", float(line)/10), ("192.168.142.145", self.dest_port))
 	
 	def trunetclock_brightness_handler(self, message, address):
@@ -96,6 +99,54 @@ class James(txXBee):
 		          dest_addr="\xff\xfe",
 		          data="\x54" +
 		               chr(brightness))
+
+	#Effects Builtin List:
+	#effect = 1 # RAIN
+	#effect = 2 # Random Z
+	#effect = 3 # Random Filler
+	#effect = 4 # Up Down Z
+	#effect = 5 # Worm Squeeze 2 width
+	#effect = 6 # Blinky2
+	#effect = 7 # Boz Shrink Grow
+	#effect = 8 # Plan Boing
+	#effect = 9 # Stairs
+	#effect = 10 # Random Suspend X, Y and Z
+	#effect = 11 # Load Bar
+	#effect = 12 # Worm Squeeze 1 width
+	#effect = 13 # String Fly "Trunet LedCube"
+	#effect = 14 # Game Of Life
+	#effect = 15 # Up Down, Left Right, Front Back
+	#effect = 16 # Worm running longer than 27
+	#effect = 17 # Smiley Spin Up
+	#effect = 18 # Spiral
+	#effect = 19 # Arrow running around
+	#effect = 20 # Smiley Spin Down
+	#effect = 21 # Path "TRUNET" running around
+	#effect = 22 # Random Path Around
+	#effect = 23 # Worm Squeeze 1 width (-1)
+	#effect = 24 # Arrow Spinning
+	#effect = 25 # Random Pixels on Cube <== COOL
+	#effect = 26 # Worm Squeeze 1 width (same as 23)
+	#effect = 27 # Worm running smaller than 16	
+	def ledcube_effect_handler(self, message, address):
+		effect = int(message.getValues()[0])
+		if effect > 0:
+			log.msg("Doing effect number " + str(effect))
+			reactor.callFromThread(self.send,
+			          "tx",
+			          frame_id="\x01",
+			          dest_addr_long=devices["ledcube"],
+			          dest_addr="\xff\xfe",
+			          data="\xff" + chr(effect))
+		
+	def ledcube_turnoff_handler(self, message, address):
+		log.msg("Turning off")
+		reactor.callFromThread(self.send,
+		          "tx",
+		          frame_id="\x01",
+		          dest_addr_long=devices["ledcube"],
+		          dest_addr="\xff\xfe",
+		          data="\xff\xfe")
 	
 	def decodeFloat(self, var):
 		text = ""
@@ -146,12 +197,11 @@ class James(txXBee):
 
 	def printOnClock(self):
 		if self.msgNumber == 6:
-			self.msgNumber = 1
+			self.msgNumber = 0
 
 		scrollingPacket = ord("\xe0") | (self.msgNumber << 1)
-		self.msgNumber += 1
 		
-		log.msg("Scrolling on clock message " + str(self.msgNumber-1))
+		log.msg("Scrolling on clock message " + str(self.msgNumber))
 		
 		reactor.callFromThread(self.send,
 		         "tx",
@@ -159,6 +209,8 @@ class James(txXBee):
 		         dest_addr_long=devices["trunetclock"],
 		         dest_addr="\xff\xfe",
 		         data="\x52" + chr(scrollingPacket))
+		
+		self.msgNumber += 1
 
 	def getWatts(self):
 		log.msg("Asking power consumption...")
@@ -183,16 +235,16 @@ class James(txXBee):
 		            dest_addr="\xff\xfe",
 		            data="\x56" + self.encodeFloat(float(0)))
 		finally:
-			m = re.search('^.*\s-\s.*\|\w*=(.*);;;;$', output)
-			if m:
+			try:
+				m = re.search('^.*\s-\s.*\|\w*=(.*);;;;$', output)
 				log.msg("Sending temperature: " + m.group(1))
 				reactor.callFromThread(self.send,
-			            "tx",
-			            frame_id="\x01",
-			            dest_addr_long=devices["trunetclock"],
-			            dest_addr="\xff\xfe",
-			            data="\x56" + self.encodeFloat(float(m.group(1))))
-			else:
+				            "tx",
+				            frame_id="\x01",
+				            dest_addr_long=devices["trunetclock"],
+				            dest_addr="\xff\xfe",
+				            data="\x56" + self.encodeFloat(float(m.group(1))))
+			except:
 				reactor.callFromThread(self.send,
 		            "tx",
 		            frame_id="\x01",
@@ -208,6 +260,7 @@ class James(txXBee):
 			santos = []
 			for item in range(0, len(feed)):
 				title = strip_accents(feed[item]['text'].encode('utf-8'))
+				title = title.replace("\n", " ")
 				
 				# Regular Expression to get what I want
 				reg_notice = re.compile('^(.*)(: http://.*)$').search(title)
@@ -219,6 +272,10 @@ class James(txXBee):
 				else:
 					title = title[:90]
 				
+				reg_via = re.compile('^(.*) - Via .*$').search(title)
+				if reg_via is not None:
+					title = reg_via.groups()[0][:90]
+				
 				created_at = rfc822.parsedate(feed[item]['created_at'])
 				if (time.mktime(created_at) >= (time.time() - (60*60*12))):
 					santos.append({
@@ -228,7 +285,7 @@ class James(txXBee):
 			return santos
 		
 		def sendToClock(data):
-			msg = 1
+			msg = 0
 			for item in range(0, len(data)):
 				item = data.pop(0)
 				if msg == 6:
