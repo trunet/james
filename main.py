@@ -29,6 +29,9 @@ from txosc import osc
 from txosc import dispatch
 from txosc import async
 
+import txpachube
+import txpachube.client
+
 import simplejson as json
 import rfc822
 import ntplib
@@ -42,9 +45,52 @@ import sys
 
 from txXBee.protocol import txXBee
 
+feed_data = """<?xml version="1.0" encoding="UTF-8"?>
+<eeml xmlns="http://www.eeml.org/xsd/0.5.1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" version="0.5.1" xsi:schemaLocation="http://www.eeml.org/xsd/0.5.1 http://www.eeml.org/xsd/0.5.1/0.5.1.xsd">
+  <environment>
+    <title>Weather Station, Morumbi Sao Paulo/SP</title>
+    <status>live</status>
+    <description>A Weather Station on Morumbi, Sao Paulo/SP</description>
+    <tag>brasil</tag>
+    <tag>brazil</tag>
+    <tag>humidity</tag>
+    <tag>morumbi</tag>
+    <tag>pressure</tag>
+    <tag>temperature</tag>
+    <tag>weather</tag>
+    <tag>station</tag>
+    <tag>wind</tag>
+    <tag></tag>
+    <tag></tag>
+    <data id="battery_voltage">
+      <current_value>%.2f</current_value>
+    </data>
+    <data id="humidity">
+      <current_value>%.2f</current_value>
+    </data>
+    <data id="pressure">
+      <current_value>%.2f</current_value>
+    </data>
+    <data id="solar_voltage">
+      <current_value>%.2f</current_value>
+    </data>
+    <data id="temperature">
+      <current_value>%.2f</current_value>
+    </data>
+  </environment>
+</eeml>"""
+
 def strip_accents(string):
 	import unicodedata
 	return unicodedata.normalize('NFKD', unicode(string, encoding="utf-8")).encode('ASCII', 'ignore')
+
+def printData(d):
+	print d
+
+def printError(failure):
+	#import sys
+	#sys.stderr.write(str(failure))
+	print str(failure)
 
 class JamesOptions(usage.Options):
 	optParameters = [
@@ -61,6 +107,9 @@ devices = {
 	"weatherstation": "\x00\x13\xA2\x00\x40\x6F\xBA\xE5",
 	"template": "\x00\x13\xA2\x00\x00\x00\x00\x00",
 }
+
+PACHUBE_API_KEY = "SZOaog34iYDlHOx1NjSbIE3tXxpuibIRtFUW8vLUtWw"
+FEED_ID = "67925"
 
 class James(txXBee):
 	def __init__(self, *args, **kwds):
@@ -93,6 +142,8 @@ class James(txXBee):
 		self.receiver.addCallback("/ledcube/effect", self.ledcube_effect_handler)
 		self.receiver.addCallback("/ledcube/turnoff", self.ledcube_turnoff_handler)
 		#self.sender.send(osc.Message("/radio/tuner", float(line)/10), ("192.168.142.145", self.dest_port))
+
+		self.pachube = txpachube.client.Client(api_key=PACHUBE_API_KEY, feed_id=FEED_ID)
 	
 	def trunetclock_brightness_handler(self, message, address):
 		brightness = int(message.getValues()[0])
@@ -202,19 +253,27 @@ class James(txXBee):
 			               "Consumo: " + str(int(self.decodeFloat(response["rf_data"][0:4]))) +
 			               " Watts")
 		elif response.get("source_addr_long", "default").lower() == devices["weatherstation"].lower():
+			self.handle_weather_station_packet(response["rf_data"])
+
+	def handle_weather_station_packet(self, data):
+		def send_to_clock(data):
 			log.msg("Received weather station packet, sending to clock...")
-			reactor.callFromThread(self.send,
+			self.send(
 			          "tx",
 			          frame_id="\x01",
 			          dest_addr_long=devices["trunetclock"],
 			          dest_addr="\xff\xfe",
 			          data="\x51" +
 			               "\x01" + 
-			               "WS - T: %.1fC, " +
-				       "P: %.1fmb, "
-				       "H: %.1f%"
-					% (self.decodeFloat(response["rf_data"][12:16]), self.decodeFloat(response["rf_data"][0:4]), self.decodeFloat(response["rf_data"][8:12]))
+			               "WS - T: %.1fC, P: %.1fmb, H: %.1f%%" % (self.decodeFloat(data[12:16]), self.decodeFloat(data[0:4]), self.decodeFloat(data[8:12]))
 			)
+		
+		def send_to_pachube(data):
+			log.msg("Sending to pachube... ")
+			self.pachube.update_feed(format=txpachube.DataFormats.XML, data=feed_data % (self.decodeFloat(data[18:22]), self.decodeFloat(data[8:12]), self.decodeFloat(data[0:4]), self.decodeFloat(data[22:26]), self.decodeFloat(data[12:16])))
+
+		reactor.callFromThread(send_to_clock, data)
+		reactor.callFromThread(send_to_pachube, data)
 
 	def printOnClock(self):
 		if self.msgNumber == 2: #mude para 6 para todas mensagens
@@ -256,7 +315,8 @@ class James(txXBee):
 		import subprocess
 		import re
 		try:
-			output = subprocess.check_output(["./check_nrpe", "-H", "192.168.142.1", "-c", "check_temperature"])
+			#output = subprocess.check_output(["./check_nrpe", "-H", "192.168.142.1", "-c", "check_temperature"])
+			output = subprocess.check_output(["/usr/lib/nagios/plugins/check_temp_watchport.py", "--temperature", "--wmin", "10", "--wmax",  "35", "--cmin", "5", "--cmax", "40"])
 		except:
 			reactor.callFromThread(self.send,
 		            "tx",
