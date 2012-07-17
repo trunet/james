@@ -265,7 +265,7 @@ class James(txXBee):
 			          dest_addr="\xff\xfe",
 			          data="\x51" +
 			               "\x01" + 
-			               "WS - T: %.1fC, P: %.1fmb, H: %.1f%%" % (self.decodeFloat(data[12:16]), self.decodeFloat(data[0:4]), self.decodeFloat(data[8:12]))
+			               "WS - T: %.1fC, P: %.1fhPa, H: %.1f%%" % (self.decodeFloat(data[12:16]), self.decodeFloat(data[0:4]), self.decodeFloat(data[8:12]))
 			)
 		
 		def send_to_pachube(data):
