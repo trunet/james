@@ -58,6 +58,7 @@ devices = {
 	"energymonitor": "\x00\x13\xA2\x00\x40\x5D\x35\x04",
 	"trunetclock": "\x00\x13\xA2\x00\x40\x66\x5D\xEF",
 	"ledcube": "\x00\x13\xA2\x00\x40\x6F\xB7\x68",
+	"weatherstation": "\x00\x13\xA2\x00\x40\x6F\xBA\xE5",
 	"template": "\x00\x13\xA2\x00\x00\x00\x00\x00",
 }
 
@@ -66,18 +67,21 @@ class James(txXBee):
 		super(James, self).__init__(*args, **kwds)
 		self.msgNumber = 0
 
-		self.lc_getTemp = task.LoopingCall(self.getTemp)
+		self.lc_getTemp = task.LoopingCall(self.getTempNrpe)
 		self.lc_getTemp.start(30.0)
 
 		self.lc_watt = task.LoopingCall(self.getWatts)
 		self.lc_watt.start(35.0)
-		
-		self.lc_get_sigasantos = task.LoopingCall(self.getSantos)
-		self.lc_get_sigasantos.start(300.0)
+
+		self.lc_getWeatherStation = task.LoopingCall(self.getWeatherStation)
+		self.lc_getWeatherStation.start(60.0)
+
+		#self.lc_get_sigasantos = task.LoopingCall(self.getSantos)
+		#self.lc_get_sigasantos.start(300.0)
 		
 		self.lc_printOnClock = task.LoopingCall(self.printOnClock)
-		self.lc_printOnClock.start(35.0, now=False)
-		
+		self.lc_printOnClock.start(35.0)
+
 		#TXOSC
 		self.port = 8000
 		self.dest_port = 9000
@@ -164,6 +168,8 @@ class James(txXBee):
 
 	def handle_packet(self, xbeePacketDictionary):
 		response = xbeePacketDictionary
+		if (response.get("source_addr_long", "default") != "default"):
+			log.msg("Received packet from: " + response.get("source_addr_long").encode("hex"))
 		if (response.get("rf_data", "default") != "default"):
 			if len(response.get("rf_data")) > 0:
 				if response.get("rf_data")[0] == "\x01":
@@ -184,7 +190,8 @@ class James(txXBee):
 						          dest_addr_long=response.get("source_addr_long"),
 						          dest_addr="\xff\xfe",
 						          data=chr(t1) + chr(t2) + chr(t3) + chr(t4))
-		elif response.get("source_addr_long", "default") == devices["energymonitor"]:
+		if response.get("source_addr_long", "default").lower() == devices["energymonitor"].lower():
+			log.msg("Received energy monitor packet, sending to clock...")
 			reactor.callFromThread(self.send,
 			          "tx",
 			          frame_id="\x01",
@@ -194,9 +201,23 @@ class James(txXBee):
 			               "\x00" + 
 			               "Consumo: " + str(int(self.decodeFloat(response["rf_data"][0:4]))) +
 			               " Watts")
+		elif response.get("source_addr_long", "default").lower() == devices["weatherstation"].lower():
+			log.msg("Received weather station packet, sending to clock...")
+			reactor.callFromThread(self.send,
+			          "tx",
+			          frame_id="\x01",
+			          dest_addr_long=devices["trunetclock"],
+			          dest_addr="\xff\xfe",
+			          data="\x51" +
+			               "\x01" + 
+			               "WS - T: %.1fC, " +
+				       "P: %.1fmb, "
+				       "H: %.1f%"
+					% (self.decodeFloat(response["rf_data"][12:16]), self.decodeFloat(response["rf_data"][0:4]), self.decodeFloat(response["rf_data"][8:12]))
+			)
 
 	def printOnClock(self):
-		if self.msgNumber == 6:
+		if self.msgNumber == 2: #mude para 6 para todas mensagens
 			self.msgNumber = 0
 
 		scrollingPacket = ord("\xe0") | (self.msgNumber << 1)
@@ -221,7 +242,16 @@ class James(txXBee):
 		             dest_addr="\xff\xfe",
 		             data="\x05")
 
-	def getTemp(self):
+	def getWeatherStation(self):
+		log.msg("Getting weather station packet...")
+		reactor.callFromThread(self.send,
+		             "tx",
+		             frame_id="\x01",
+		             dest_addr_long=devices["weatherstation"],
+		             dest_addr="\xff\xfe",
+		             data="\x01")
+
+	def getTempNrpe(self):
 		log.msg("Getting temperature from nrpe server...")
 		import subprocess
 		import re
