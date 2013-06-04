@@ -129,7 +129,26 @@ class James(txXBee):
 		#self.lc_get_sigasantos.start(300.0)
 		
 		self.lc_printOnClock = task.LoopingCall(self.printOnClock)
-		self.lc_printOnClock.start(35.0)
+		self.lc_printOnClock.start(25.0)
+
+		c = ntplib.NTPClient()
+		try:
+			ntpresponse = c.request('br.pool.ntp.org', version=3)
+			timestamp = int(ntpresponse.tx_time)
+			log.msg("Sending NTP timestamp " + str(timestamp) + " to " + devices["trunetclock"].encode("hex") + "...")
+		except:
+			timestamp = int(time.time())
+			log.msg("Sending own server time " + str(timestamp) + " to " + devices["trunetclock"].encode("hex") + "...")
+		t1 = timestamp & 0xff
+		t2 = (timestamp >> 8) & 0xff
+		t3 = (timestamp >> 16) & 0xff
+		t4 = (timestamp >> 24) & 0xff
+		reactor.callFromThread(self.send,
+					          "tx",
+					          frame_id="\x01",
+					          dest_addr_long=devices["trunetclock"],
+					          dest_addr="\xff\xfe",
+					          data=chr(0x50) + chr(t1) + chr(t2) + chr(t3) + chr(t4))
 
 		#TXOSC
 		self.port = 8000
@@ -226,32 +245,33 @@ class James(txXBee):
 				if response.get("rf_data")[0] == "\x01":
 					c = ntplib.NTPClient()
 					try:
-						response = c.request('br.pool.ntp.org', version=3)
-						timestamp = int(response.tx_time)
+						ntpresponse = c.request('br.pool.ntp.org', version=3)
+						timestamp = int(ntpresponse.tx_time)
+						log.msg("Sending NTP timestamp " + str(timestamp) + " to " + response.get("source_addr_long").encode("hex") + "...")
 					except:
 						timestamp = int(time.time())
-					finally:
-						t1 = timestamp & 0xff
-						t2 = (timestamp >> 8) & 0xff
-						t3 = (timestamp >> 16) & 0xff
-						t4 = (timestamp >> 24) & 0xff
-						reactor.callFromThread(self.send,
-						          "tx",
-						          frame_id="\x01",
-						          dest_addr_long=response.get("source_addr_long"),
-						          dest_addr="\xff\xfe",
-						          data=chr(t1) + chr(t2) + chr(t3) + chr(t4))
+						log.msg("Sending own server time " + str(timestamp) + " to " + response.get("source_addr_long").encode("hex") + "...")
+					t1 = timestamp & 0xff
+					t2 = (timestamp >> 8) & 0xff
+					t3 = (timestamp >> 16) & 0xff
+					t4 = (timestamp >> 24) & 0xff
+					reactor.callFromThread(self.send,
+					          "tx",
+					          frame_id="\x01",
+					          dest_addr_long=response.get("source_addr_long"),
+					          dest_addr="\xff\xfe",
+					          data=chr(t1) + chr(t2) + chr(t3) + chr(t4))
 		if response.get("source_addr_long", "default").lower() == devices["energymonitor"].lower():
-			log.msg("Received energy monitor packet, sending to clock...")
-			reactor.callFromThread(self.send,
+			log.msg("Received energy monitor packet %.1fW, sending to clock..." % (self.decodeFloat(response["rf_data"][0:4])))
+			self.send(
 			          "tx",
 			          frame_id="\x01",
 			          dest_addr_long=devices["trunetclock"],
 			          dest_addr="\xff\xfe",
 			          data="\x51" +
 			               "\x00" + 
-			               "Consumo: " + str(int(self.decodeFloat(response["rf_data"][0:4]))) +
-			               " Watts")
+			               "Consumo: %.1f Watts" % (self.decodeFloat(response["rf_data"][0:4]))
+			)
 		elif response.get("source_addr_long", "default").lower() == devices["weatherstation"].lower():
 			self.handle_weather_station_packet(response["rf_data"])
 
